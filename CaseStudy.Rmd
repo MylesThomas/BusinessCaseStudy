@@ -1,0 +1,640 @@
+
+---
+title: 'Case Study'
+author: "Myles Thomas"
+date: "12/16/2020"
+output:
+  word_document: default
+fontsize: 12pt
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+
+# Case Study 21.6 - Segmenting Consumers of Bath Soap
+
+
+CRISA is an Asian market research agency that specializes in tracking consumer purchase behavior in consumer goods. They would like to segment the soap buyers' market based on two sets of variables more directly related to the purchase process and to brand loyalty:
+
+1. Purchase behavior (volume, frequency, susceptibility to discounts, brand loyalty)
+
+2. Basis of purchase (price, selling proposition)
+
+The reason for this segmentation is that once this market is segmented successfully with a new method, the agency can further segment those clusters using the traditional segmentation of markets on the basis of purchaser demographics.
+
+Things to note before diving in:
+
+K (K = The number of cluster) will be chosen by running the k-means algorithm in each part and seeing which number of k (Will try values from 2 through 5) has the best spread of clusters.  
+
+
+Brand Loyalty is an important aspect of this Case Study, and there are a number of ways to quantify this idea. The transaction/brand runs ratio is a good start for seeing if a customer is loyal or not (A brand run is a string of consecutive times that a customer purchases the same brand). Brand-wise Volume % is more self explanatory: if a customer is brand loyal, the customer will purchase a make a large proportion of purchases to one brand. In order to account for the 9 Brandwise purchase columns, code will be written that checks to see if any of the first 8 columns have a % higher than 50%, since that proves the customer is making a majority of transactions for that brand.  
+
+The final derived predictor 'BrandLoyalYN' will give a customer a 1 if the customer has a Trans/Brand runs ratio of above 2.0 AND a 50% or higher in one of the first 8 brand columns.
+
+
+```{r, results='hide', include=FALSE}
+# results=hide does nothing here
+
+
+# Load in libraries
+library(factoextra)
+library(FNN)
+library(adabag)
+library(knitr)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(neuralnet)
+library(caret)
+library(forecast)
+library(gains)
+library(MASS)
+library(DiscriMiner)
+library(dummies)
+library(fastDummies)
+library(e1071)
+library(arules)
+library(recommenderlab)
+library(factoextra)
+library(NbClust)
+library(arulesViz)
+library(reshape2)
+library(openxlsx)
+library(ggplot2)
+```
+
+
+
+```{r, include=FALSE}
+# Read in sheet 2 from the excel file. Clean up data to include only the variables needed.
+
+#  was having trouble reading in sheet 2 and getting the headers read in properly,
+# edited the BathSoap file and saved it to BathSoap2, and read that in instead.
+
+# Set.seed to try and fix problem with differing clusters each time.
+set.seed(11)
+
+# Load in data
+df.full <- openxlsx::read.xlsx("BathSoap2.xlsx", colNames = TRUE)
+
+# Remove member ID
+df.full <- df.full[,-1]
+
+# Remove the last row, which is all NA besides a value in Total.Volume
+df <- df.full[-601,]
+```
+
+
+
+```{r, include=FALSE}
+# Derive the predictor 'BrandLoyalYN' to see who is deemed loyal, for use in k-means clustering.
+
+# set up ifelse() for proportion greater than 50%
+df <- df %>% mutate(PropAbove50 = ifelse(df$`Br..Cd..57,.144`>.5 | df$Br..Cd..55>.5 | df$Br..Cd..272>.5 | df$Br..Cd..286>.5 | df$Br..Cd..24>.5 | df$Br..Cd..481>.5 | df$Br..Cd..352>.5 | df$Br..Cd..5>.5
+                                         ,1,0))
+
+# Create predictor 'BrandLoyalYN' by requiring a Brand Proportion>.50 AND Trans/Brand Run ratio above 
+df <- df %>% mutate(BrandLoyalYN = ifelse(PropAbove50==1 & `Trans./.Brand.Runs`>2
+                                          ,1,0))
+```
+
+
+## 1
+
+### Using Purchase behavior to Segment the Market
+
+
+Starting off, here are quick descriptions of the relevant variables involved for Method 1, including whether they are categorical or quantitative:
+
+Quantitative vars:
+
+-Total.Volume, the total volume of products purchased (in grams)
+
+-No. of Trans, gives context for frequency of purchases 
+
+-Pur.Vol.No.Promo.-.%, Percent of volume purchased not on promotion
+
+-Pur.Vol.Promo.6.%, Percent of volume purchased on promo code 6
+
+Categorical vars:
+
+-BrandLoyalYN, the derived variable to decide if an observation can be deemed brand loyal, or not (binary)
+
+
+
+```{r, include=FALSE}
+## NOTE - -Pur.Vol.Other.Promo.%, Percent of volume purchased on promo code other than 6 
+## was removed in order to fix the computationally singular error 
+
+# set up dataframe for this problem
+df.1a <- df
+
+# grab only the columns needed for this problem
+df.1a <- df.1a[,c(13:14,19:21,47)]
+
+# remove column with '% volume purchased on promo code other than 6'
+df.1a <- df.1a[,-5]
+
+# calculate normalized distance
+df.1a.normalized <- sapply(df.1a, scale)
+
+# decide on k using algorithm
+NbClust(df.1a, distance="euclidean", method="kmeans",
+min.nc = 2, max.nc = 5,
+index = c('all'))
+
+# using k=3 (found with NbClust) ; run kmeans() to create clusters
+set.seed(11)
+km.1a <- kmeans(df.1a.normalized, 3)
+
+# run this to have a neat table of which clusters had how many observations
+set.seed(11)
+kmeans(df.1a.normalized, 2)$cluster %>% table()
+kmeans(df.1a.normalized, 3)$cluster %>% table()
+kmeans(df.1a.normalized, 4)$cluster %>% table()
+kmeans(df.1a.normalized, 5)$cluster %>% table()
+```
+
+
+```{r, echo=FALSE}
+# show output of silhouette plots
+fviz_nbclust(df.1a.normalized, FUNcluster = hcut, method = "silhouette", k.max=5) +  labs(subtitle = "Silhouette method with K-Means")
+
+# output knitr
+kable(data.frame(C1 = c(120,320,242,68),
+           C2 = c(480,80,72,186),
+           C3 = c("-",200,116,106),
+           C4 = c(rep("-",2),170,44),
+           C5 = c(rep("-",3),196),
+           row.names = c("K = 2 clusters", "K = 3 clusters", "K = 4 clusters", "K = 5 clusters")
+           ), caption = "Cluster sizes based on how many k chosen, Method 1")
+```
+
+
+Cluster size k=3 at first glance seems like the best choice for K since each cluster size is above 50 and no cluster takes up too much of the data. By using R to decide the optimal number of k, the function NbClust agrees that 3 clusters is the best number of k for Method 1. The resulting silhouette plot agrees by suggesting k=3.
+
+
+
+
+### Using Basis for Purchase to Segment the Market
+
+For this next method, all relevant variables involved are quantitative percentages, as they represent the % of Volume Purchased under the given categories. The 4 "Price Categories" are dependent on one another and add up to 100%, and in the same way the 11 "Proposition Categories" add up to 100%.
+
+Price categories:
+
+1. Premium soaps
+
+2. Popular soaps
+
+3. Economy/Carbolic soaps
+
+4. Sub-popular soaps
+
+Proposition categories:
+
+5. Beauty
+
+6. Health
+
+7. Herbal
+
+8. Freshness
+
+9. Hair
+
+10. Skin Care
+
+11. Fairness
+
+12. Baby
+
+13. Glycerine
+
+14. Garbolic
+
+15. Others
+
+
+
+```{r, include=FALSE}
+## NOTE - Sub-popular soaps AND 'Others' for Proposition cats 
+## was removed in order to fix the computationally singular error 
+
+
+# set up dataframe for this problem
+df.1b <- df
+
+# grab only the columns needed for this problem
+df.1b <- df.1b[,31:45]
+
+# remove last column for 'price' and 'proposition' to remove comp sing error, they all add to 100% anyways
+df.1b <- df.1b[,-c(4,15)]
+
+# calculate normalized distance
+df.1b.normalized <- sapply(df.1b, scale)
+
+# decide on k using algorithm
+NbClust(df.1b, distance="euclidean", method="kmeans",
+min.nc = 2, max.nc = 5,
+index = c('all'))
+
+# using k=3 (found with NbClust) run kmeans() to create clusters
+set.seed(11)
+km.1b <- kmeans(df.1b.normalized, 3)
+
+# run this to have a neat table of which clusters had how many observations
+set.seed(11)
+kmeans(df.1b.normalized, 2)$cluster %>% table()
+kmeans(df.1b.normalized, 3)$cluster %>% table()
+kmeans(df.1b.normalized, 4)$cluster %>% table()
+kmeans(df.1b.normalized, 5)$cluster %>% table()
+```
+
+
+```{r, echo=FALSE}
+# show output of silhouette plots
+fviz_nbclust(df.1b.normalized, FUNcluster = hcut, method = "silhouette", k.max=5) +  labs(subtitle = "Silhouette method with K-Means")
+
+# output knitr
+kable(data.frame(C1 = c(78,78,109,114),
+           C2 = c(522,76,116,299),
+           C3 = c("-",446,297,53),
+           C4 = c(rep("-",2),78,74),
+           C5 = c(rep("-",3),60),
+           row.names = c("K = 2 clusters", "K = 3 clusters", "K = 4 clusters", "K = 5 clusters")
+           ), caption = "Cluster sizes based on how many k chosen, Method 2")
+```
+
+
+Cluster size k=3 has once again selected by the NbClust algorithm. It should be noted that Cluster 3 is abnormally large (n=446). Once again, the silhouette plot agrees and suggests k=3, so the result k=3 from NbClust will be final.
+
+
+
+
+### Combining the prior 2 methods to Segment the Market
+
+Running k-means clustering on all of the variables from both a) and b), which have already been summarized.
+
+```{r, include=FALSE}
+# set up dataframe for this problem, grab only the columns needed for this problem
+df.1c <- cbind(df.1a,df.1b) 
+
+# calculate normalized distance
+df.1c.normalized <- sapply(df.1c, scale)
+
+# decide on k using algorithm
+NbClust(df.1c, distance="euclidean", method="kmeans",
+min.nc = 2, max.nc = 5,
+index = c('all'))
+
+# using k=3 (found with NbClust) run kmeans() to create clusters
+set.seed(11)
+km.1c <- kmeans(df.1c.normalized, 3)
+
+# run this to have a neat table of which clusters had how many observations
+set.seed(11)
+kmeans(df.1c.normalized, 2)$cluster %>% table()
+kmeans(df.1c.normalized, 3)$cluster %>% table()
+kmeans(df.1c.normalized, 4)$cluster %>% table()
+kmeans(df.1c.normalized, 5)$cluster %>% table()
+```
+
+
+
+```{r, echo=FALSE}
+# show output of silhouette plots
+fviz_nbclust(df.1c.normalized, FUNcluster = hcut, method = "silhouette", k.max=5) +  labs(subtitle = "Silhouette method with K-Means")
+
+# output knitr
+kable(data.frame(C1 = c(74,326,107,163),
+           C2 = c(526,73,95,63),
+           C3 = c("-",201,326,61),
+           C4 = c(rep("-",2),72,73),
+           C5 = c(rep("-",3),240),
+           row.names = c("K = 2 clusters", "K = 3 clusters", "K = 4 clusters", "K = 5 clusters")
+           ), caption = "Cluster sizes based on how many k chosen, Method 3")
+```
+
+
+Cluster size k=3 has once again selected by the NbClust algorithm. The resulting silhouette plot again disagrees and suggests k=2, but cluster size selection is subjective due to so many methods of decision. The NbClust method will remain superior here, so once again k=3. 
+
+
+
+## 2 - Selecting the Best Segmentation.
+
+First, observe the cluster sizes for all 3 approaches.
+
+```{r, echo=FALSE}
+kable(data.frame(C1 = c(320,78,326),
+                 C2 = c(80,76,73),
+                 C3 = c(200,446,201),
+                 row.names = c("Method 1 - ","Method 2 - ","Method 3 - ")),
+      caption = "Cluster size for all 3 approaches")
+```
+
+Now, to aggregate/plot the means of each variable to look at the discrepancies/differences.
+
+Method 1:
+
+
+
+```{r, echo=FALSE}
+# plot centroids
+## create data frame with cluster names and centroids
+cluster <- rownames(km.1a$centers)
+centers4 <- data.frame(cluster, km.1a$centers)
+
+# reshape it for plotting
+centers4.plot <- melt(centers4, id.vars="cluster",
+measure.vars = names(centers4[,-1]))
+
+# make cluster mnames a factor variable
+centers4.plot$cluster <- factor(centers4.plot$cluster)
+
+# make the plot
+ggplot(centers4.plot, aes(x=variable, y=value, color=cluster,
+group=cluster)) +
+geom_line() + geom_point() +
+theme(axis.text.x = element_text(angle = 30, vjust = 1, hjust=1),
+axis.title.x=element_blank())
+```
+
+
+Cluster names:
+
+1 - Brand Loyal
+
+2 - Frugal Buyer
+
+3 - Frequent Shopper, Not Loyal
+
+
+
+
+Method 2:
+
+```{r, echo=FALSE}
+# plot centroids
+## create data frame with cluster names and centroids
+cluster <- rownames(km.1b$centers)
+centers4 <- data.frame(cluster, km.1b$centers)
+
+# reshape it for plotting
+centers4.plot <- melt(centers4, id.vars="cluster",
+measure.vars = names(centers4[,-1]))
+
+# make cluster mnames a factor variable
+centers4.plot$cluster <- factor(centers4.plot$cluster)
+
+# make the plot
+ggplot(centers4.plot, aes(x=variable, y=value, color=cluster,
+group=cluster)) +
+geom_line() + geom_point() +
+theme(axis.text.x = element_text(angle = 30, vjust = 1, hjust=1),
+axis.title.x=element_blank())
+```
+
+
+Cluster names:
+
+1 - Garbolic
+
+2 - High end
+
+3 - Middle Class
+
+
+
+
+
+Method 3:
+
+
+```{r, echo=FALSE}
+# plot centroids
+## create data frame with cluster names and centroids
+cluster <- rownames(km.1c$centers)
+centers4 <- data.frame(cluster, km.1c$centers)
+
+# reshape it for plotting
+centers4.plot <- melt(centers4, id.vars="cluster",
+measure.vars = names(centers4[,-1]))
+
+# make cluster mnames a factor variable
+centers4.plot$cluster <- factor(centers4.plot$cluster)
+
+# make the plot
+ggplot(centers4.plot, aes(x=variable, y=value, color=cluster,
+group=cluster)) +
+geom_line() + geom_point() +
+theme(axis.text.x = element_text(angle = 30, vjust = 1, hjust=1),
+axis.title.x=element_blank())
+```
+
+Cluster names:
+
+1 - Loyal to Garbolic Soap
+
+2 - Joe Shmoe (Average person) buys the first soap in sight
+
+3 - Outward beauty, uses promo code 6
+
+
+
+
+
+Looking at the means, here is what stood out for METHOD 1 (Purchase Behavior):
+
+- Cluster 1 has middling results, except for a very high proportion (100%) of 'Yes' for Brand Loyalty. This cluster represents a customer who is Brand Loyal.
+
+- Cluster 2 is the most variant, with a very low proportion for Purchase Volume w/ no promo code and a very high proportion (24%) of Purchase Volume w/ promo code 6. This cluster represents a customer who is frugal, and very succeptable to using promo codes.
+
+- Cluster 3 is very average, as it has middling proportions for all 5 predictors. Due to the highest value for # of transactions and lowest proportion for brand loyalty, this cluster represents a customer who shops often but does not care about promos or brand loyalty.
+
+
+
+
+
+
+What stood out for METHOD 2 (Basis of Purchase):
+
+- Cluster 1 has very high proportions (77% each) for Economy/Carbolic price category and Garbolic product proposition category. This cluster represents a customer who is into Garbolic and Economy priced soaps.
+
+- Cluster 2 has average proportions besides very high proportions in Premium soaps price category (72%) and Glycerine product proposition category (%). This cluster is for the expensive soap buyer, since Glycerin soap is more expensive than most other types of soap.
+
+- Cluster 3 has middling proportions throughout except for a relatively high proportion of Popular soaps. This cluster is for the middle-upper middle class soap buyer.
+
+
+
+
+What stood out for METHOD 3 (Combination Method):
+
+By combining parts A and B, the importance for the brand loyalty variable is diminished (One predictor that seems to be very important). Instead of having a huge weight like it did in Method 1, it seems that now Cluster 1 has relatively high brand loyalty and Clusters 2/3 with below average brand loyalty. It appears that brand loyalty is a very useful part of the segmentation, but it is possible that with only a few predictors the weight was too much. Anyhow,
+
+- Cluster 1 has abnormally high proportions for Brand Loyalty (68%), Economy Soaps (80%) and Garbolic Soaps (79%. This cluster represents the buyer who is loyal to middle-priced garbolic soap brands.
+
+- Cluster 2 has no abnormalities, as each proportion is average throughout. This cluster represents the average soap buyer.
+
+- Cluster 3 has relatively high proportions for the Beauty/Freshness/Skin care propositions, as well as the highest proportion for use of promo code 6 (11%). This cluster represents those who worry a lot about their skin and outward appearance.
+
+
+
+
+
+
+Decision: 
+
+The Basis for Purchase Method alone is the worst. The Purchase Behavior clusters are good, especially with how brand loyalty is an important factor, but the fact that all 3 clusters have similar values for use of promo codes removes an important part of the analysis. The combination method not only takes into account brand loyalty, creates good sized clusters and has distinct features for all 3 of the clusters, but being the only method that properly takes into account the use of promo codes makes Method 3 the recommended method going forward. 
+
+
+
+## 3 -  Build a Classification Model 
+
+Since the information observed this far is in an effort to find a group to be targeted by direct-mail promotions, developing a model that defines observations as "1" success if it is classified in the correct cluster (The cluster most susceptible to using promotions) and a "0" if not should do the trick.
+
+Using The Combination Method's clusters, Cluster 3 becomes the "success" group while Clusters 1 and 2 come together and are the "0". This is because cluster 3 is most susceptible to using promo codes. 
+
+```{r, echo=FALSE}
+# set df.1a as 'data' since this is the method selected
+data.full <- df.1c
+
+# add the clusters to 'data.full'
+data.full$ClusterAssociation <- km.1c$cluster
+
+# create binary where 1=in success class and 0=is not
+data.full <- data.full %>% mutate(SuccessGroup = ifelse(ClusterAssociation=="3",1,0))
+
+# remove the "Cluster Assocation" column, because now "success group" matters instead
+data <- data.full[,-19]
+
+# turn the response var and predictor BrandLoyalYN into factors
+data$BrandLoyalYN <- factor(data$BrandLoyalYN,
+                            levels=c(0,1))
+
+data$SuccessGroup <- factor(data$SuccessGroup,
+                            levels=c(0,1))
+```
+
+
+
+
+```{r, include=FALSE}
+# random partition
+set.seed(11) # partition
+train.index <- sample(row.names(data), 0.6*dim(data)[1])
+valid.index <- setdiff(row.names(data), train.index)
+
+data.train <- data[train.index, ]
+data.valid <- data[valid.index, ]
+
+data.train ; data.valid
+```
+
+Logistic Regression:
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+# set up model
+model.lr <- glm(SuccessGroup~., data = data.train, family = "binomial")
+
+# predict using validation set
+set.seed(11)
+preds.lr <- predict(model.lr, newdata=data.valid, type="response")
+
+# set up confusion matrix ; display the accuracy
+cm.lr <- confusionMatrix(as.factor(ifelse(preds.lr>.5,1,0)),
+                         as.factor(data.valid$SuccessGroup),
+                         positive = "1"
+  
+)
+
+cm.lr$overall[1]
+```
+
+
+Classification tree:
+
+```{r, echo=FALSE}
+# set up model
+model.CT <- rpart::rpart(SuccessGroup ~.,
+                           data = data.train,
+                           method = "class",
+                           cp=.0001,
+                           minsplit=2,
+                           xval=5)
+
+# get preds
+set.seed(11)
+preds.CT <- predict(model.CT, newdata=data.valid, type="class")
+
+# set up confusion matrix ; show accuracy
+cm.CT <- confusionMatrix(as.factor(preds.CT),
+                         as.factor(data.valid$SuccessGroup),
+                         positive = "1"
+)
+
+cm.CT$overall[1]
+```
+
+k-NN:
+
+```{r, echo=FALSE}
+# normalize predictors
+norm.valuesKNN <- preProcess(data.train, method = c("center","scale"))
+data.train.normalized <- predict(norm.valuesKNN, data.train)
+data.valid.normalized <- predict(norm.valuesKNN, data.valid)
+
+# fix this error 'Data non-numeric'
+data.train.normalized$BrandLoyalYN <- data.train.normalized$BrandLoyalYN %>% as.character() %>% as.numeric()
+data.train.normalized$BrandLoyalYN <- data.train.normalized$SuccessGroup %>% as.character() %>% as.numeric()
+
+data.valid.normalized$BrandLoyalYN <- data.valid.normalized$BrandLoyalYN %>% as.character() %>% as.numeric()
+data.valid.normalized$BrandLoyalYN <- data.valid.normalized$SuccessGroup %>% as.character() %>% as.numeric()
+
+# using the FNN pacage
+knn.preds <- knn(train=data.train.normalized[,-19],
+                 test=data.valid.normalized[,-19],
+                 cl=data.train.normalized$SuccessGroup,
+                 k=5
+)
+
+# confusion matrix ; show accuracy
+cm.KNN <- confusionMatrix(knn.preds, as.factor(data.valid.normalized$SuccessGroup),
+                          positive = "1")
+
+cm.KNN$overall[1]
+```
+
+
+
+
+
+
+
+
+
+
+
+Interpretations and conclusions of the results:
+
+The Logistic Regression Model and K-NN models both had great accuracy, as they predicted 5 and 8 observations incorrect, respectively.
+
+LR:
+
+```{r, echo=FALSE}
+cm.lr$table
+```
+
+k-NN:
+
+```{r, echo=FALSE}
+cm.KNN$table
+```
+Due to the ease of interpretations and 97.9% Accuracy of the Logistic Regression Model, that is the model that will be recommended.
+
+
+
+
+Overall, when using brand loyalty and purchase behavior to group people into clusters, it is possible to find those more likely to using promo codes whom can be targeted in a marketing campaign. Despite the fact that the Basis of Purchase variables were unable to segment the market into relevant clusters, and that the Purchase Behavior clusters lacked interpretation of the use of promo codes, the goal was still accomplished.
+
+By combining the data and methods, this allowed for segmenting into relevant clusters of a demographic of choice. This led to a model being fit that accurately predicted almost 100% of observations in the validation data set. Using this information going forward, the market research agency should be able to further segment the market using traditional demographics and improve performance/success with future marketing campaigns.
